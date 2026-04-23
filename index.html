@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🦕 공룡 게임</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #f7f7f7;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-family: 'Courier New', monospace;
+  overflow: hidden;
+}
+
+#gameContainer {
+  position: relative;
+  border-bottom: 2px solid #535353;
+}
+
+canvas {
+  display: block;
+}
+
+#info {
+  text-align: center;
+  margin-top: 15px;
+  color: #535353;
+  font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<div>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="800" height="250"></canvas>
+  </div>
+  <div id="info">SPACE 또는 ↑ : 점프 &nbsp;|&nbsp; ↓ : 웅크리기 &nbsp;|&nbsp; 모바일: 화면 터치</div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ===== 게임 상태 =====
+let gameStarted = false;
+let gameOver = false;
+let score = 0;
+let highScore = parseInt(localStorage.getItem('dinoHighScore')) || 0;
+let gameSpeed = 6;
+let frameCount = 0;
+let isNight = false;
+
+// ===== 공룡 =====
+const dino = {
+  x: 50,
+  y: 180,
+  width: 44,
+  height: 48,
+  groundY: 180,
+  velocityY: 0,
+  gravity: 0.6,
+  jumpForce: -12,
+  isJumping: false,
+  isDucking: false,
+  duckHeight: 30,
+  legFrame: 0,
+  legTimer: 0
+};
+
+// ===== 장애물 배열 =====
+let obstacles = [];
+let clouds = [];
+let stars = [];
+let groundTiles = [];
+
+// ===== 지면 패턴 =====
+const GROUND_Y = 228;
+
+function initGround() {
+  groundTiles = [];
+  for (let i = 0; i < 40; i++) {
+    groundTiles.push({
+      x: i * 30,
+      width: Math.random() * 15 + 5,
+      y: GROUND_Y + Math.random() * 8
+    });
+  }
+}
+
+// ===== 구름 =====
+function spawnCloud() {
+  clouds.push({
+    x: canvas.width + Math.random() * 200,
+    y: Math.random() * 80 + 10,
+    width: 46,
+    speed: gameSpeed * 0.3
+  });
+}
+
+// ===== 별 (야간 모드) =====
+function initStars() {
+  stars = [];
+  for (let i = 0; i < 20; i++) {
+    stars.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * 150,
+      size: Math.random() * 2 + 1,
+      twinkle: Math.random() * Math.PI * 2
+    });
+  }
+}
+
+// ===== 장애물 생성 =====
+function spawnObstacle() {
+  const types = ['cactusSmall', 'cactusLarge', 'cactusGroup', 'bird'];
+  let type;
+
+  if (score < 500) {
+    type = types[Math.floor(Math.random() * 3)]; // 새는 나중에 등장
+  } else {
+    type = types[Math.floor(Math.random() * 4)];
+  }
+
+  const obstacle = { x: canvas.width + Math.random() * 100, type: type };
+
+  switch (type) {
+    case 'cactusSmall':
+      obstacle.width = 17;
+      obstacle.height = 35;
+      obstacle.y = GROUND_Y - obstacle.height;
+      break;
+    case 'cactusLarge':
+      obstacle.width = 25;
+      obstacle.height = 50;
+      obstacle.y = GROUND_Y - obstacle.height;
+      break;
+    case 'cactusGroup':
+      obstacle.width = 45;
+      obstacle.height = 40;
+      obstacle.y = GROUND_Y - obstacle.height;
+      break;
+    case 'bird':
+      obstacle.width = 42;
+      obstacle.height = 30;
+      const birdHeights = [GROUND_Y - 40, GROUND_Y - 70, GROUND_Y - 100];
+      obstacle.y = birdHeights[Math.floor(Math.random() * birdHeights.length)];
+      obstacle.wingFrame = 0;
+      obstacle.wingTimer = 0;
+      break;
+  }
+
+  obstacles.push(obstacle);
+}
+
+// ===== 그리기 함수들 =====
+
+function drawDino() {
+  ctx.fillStyle = isNight ? '#e0e0e0' : '#535353';
+
+  const currentHeight = dino.isDucking ? dino.duckHeight : dino.height;
+  const drawY = dino.isDucking ? GROUND_Y - dino.duckHeight : dino.y;
+
+  if (dino.isDucking) {
+    // 웅크린 공룡
+    // 몸체
+    ctx.fillRect(dino.x, drawY + 4, 50, 20);
+    // 머리
+    ctx.fillRect(dino.x + 35, drawY - 6, 18, 16);
+    // 눈
+    ctx.fillStyle = isNight ? '#333' : '#f7f7f7';
+    ctx.fillRect(dino.x + 45, drawY - 2, 4, 4);
+    ctx.fillStyle = isNight ? '#e0e0e0' : '#535353';
+    // 다리 애니메이션
+    if (dino.legFrame % 2 === 0) {
+      ctx.fillRect(dino.x + 8, drawY + 24, 6, 8);
+      ctx.fillRect(dino.x + 22, drawY + 24, 6, 8);
+    } else {
+      ctx.fillRect(dino.x + 14, drawY + 24, 6, 8);
+      ctx.fillRect(dino.x + 28, drawY + 24, 6, 8);
+    }
+  } else if (gameOver) {
+    // 게임 오버 공룡
+    ctx.fillRect(dino.x + 5, dino.y + 5, 30, 25);
+    ctx.fillRect(dino.x + 25, dino.y - 10, 20, 20);
+    // 눈 X 표시
+    ctx.fillStyle = isNight ? '#333' : '#f7f7f7';
+    ctx.fillRect(dino.x + 33, dino.y - 4, 6, 6);
+    ctx.fillStyle = isNight ? '#e0e0e0' : '#535353';
+    // X 눈
+    ctx.strokeStyle = isNight ? '#333' : '#f7f7f7';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(dino.x + 33, dino.y - 4);
+    ctx.lineTo(dino.x + 39, dino.y + 2);
+    ctx.moveTo(dino.x + 39, dino.y - 4);
+    ctx.lineTo(dino.x + 33, dino.y + 2);
+    ctx.stroke();
+    // 다리
+    ctx.fillRect(dino.x + 10, dino.y + 30, 6, 18);
+    ctx.fillRect(dino.x + 24, dino.y + 30, 6, 18);
+  } else {
+    // 일반 공룡 (달리는 중)
+    // 몸체
+    ctx.fillRect(dino.x + 5, dino.y + 5, 28, 25);
+    // 목
+    ctx.fillRect(dino.x + 20, dino.y - 5, 12, 15);
+    // 머리
+    ctx.fillRect(dino.x + 22, dino.y - 14, 22, 16);
+    // 눈
+    ctx.fillStyle = isNight ? '#333' : '#f7f7f7';
+    ctx.fillRect(dino.x + 35, dino.y - 10, 5, 5);
+    ctx.fillStyle = isNight ? '#e0e0e0' : '#535353';
+    // 입
+    ctx.fillRect(dino.x + 36, dino.y - 2, 8, 2);
+
+    // 팔
+    ctx.fillRect(dino.x + 18, dino.y + 14, 4, 10);
+
+    // 다리 애니메이션
+    if (dino.isJumping) {
+      // 점프 중 - 다리 고정
+      ctx.fillRect(dino.x + 10, dino.y + 30, 6, 18);
+      ctx.fillRect(dino.x + 24, dino.y + 30, 6, 18);
+    } else {
+      // 달리는 중 - 다리 애니메이션
+      if (dino.legFrame % 2 === 0) {
+        ctx.fillRect(dino.x + 10, dino.y + 30, 6, 18);
+        ctx.fillRect(dino.x + 24, dino.y + 30, 6, 10);
+      } else {
+        ctx.fillRect(dino.x + 10, dino.y + 30, 6, 10);
+        ctx.fillRect(dino.x + 24, dino.y + 30, 6, 18);
+      }
+    }
+
+    // 꼬리
+    ctx.fillRect(dino.x - 2, dino.y + 8, 8, 6);
+    ctx.fillRect(dino.x - 5, dino.y + 4, 6, 6);
+  }
+}
+
+function drawCactusSmall(obs) {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+  // 줄기
+  ctx.fillRect(obs.x + 5, obs.y, 7, obs.height);
+  // 왼쪽 가지
+  ctx.fillRect(obs.x, obs.y + 8, 6, 4);
+  ctx.fillRect(obs.x, obs.y + 4, 4, 8);
+  // 오른쪽 가지
+  ctx.fillRect(obs.x + 12, obs.y + 12, 5, 4);
+  ctx.fillRect(obs.x + 13, obs.y + 8, 4, 8);
+}
+
+function drawCactusLarge(obs) {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+  // 줄기
+  ctx.fillRect(obs.x + 8, obs.y, 10, obs.height);
+  // 왼쪽 가지
+  ctx.fillRect(obs.x, obs.y + 12, 9, 5);
+  ctx.fillRect(obs.x, obs.y + 6, 5, 12);
+  // 오른쪽 가지
+  ctx.fillRect(obs.x + 17, obs.y + 18, 8, 5);
+  ctx.fillRect(obs.x + 20, obs.y + 12, 5, 12);
+}
+
+function drawCactusGroup(obs) {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+  // 첫 번째 선인장
+  ctx.fillRect(obs.x + 2, obs.y + 5, 8, obs.height - 5);
+  ctx.fillRect(obs.x - 2, obs.y + 14, 5, 4);
+  // 두 번째 선인장 (가장 큼)
+  ctx.fillRect(obs.x + 14, obs.y, 9, obs.height);
+  ctx.fillRect(obs.x + 23, obs.y + 10, 6, 4);
+  // 세 번째 선인장
+  ctx.fillRect(obs.x + 30, obs.y + 8, 7, obs.height - 8);
+  ctx.fillRect(obs.x + 36, obs.y + 16, 5, 4);
+}
+
+function drawBird(obs) {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+
+  // 몸체
+  ctx.fillRect(obs.x + 5, obs.y + 12, 25, 8);
+
+  // 날개 애니메이션
+  if (obs.wingFrame % 2 === 0) {
+    // 날개 위
+    ctx.fillRect(obs.x + 10, obs.y + 4, 6, 10);
+    ctx.fillRect(obs.x + 8, obs.y, 10, 6);
+  } else {
+    // 날개 아래
+    ctx.fillRect(obs.x + 10, obs.y + 20, 6, 10);
+    ctx.fillRect(obs.x + 8, obs.y + 24, 10, 6);
+  }
+
+  // 부리
+  ctx.fillRect(obs.x + 30, obs.y + 13, 12, 4);
+  // 꼬리
+  ctx.fillRect(obs.x, obs.y + 10, 6, 6);
+}
+
+function drawCloud(cloud) {
+  const c = isNight ? '#444' : '#d4d4d4';
+  ctx.fillStyle = c;
+  // 간단한 구름 모양
+  ctx.fillRect(cloud.x, cloud.y + 8, 40, 10);
+  ctx.fillRect(cloud.x + 6, cloud.y + 2, 14, 8);
+  ctx.fillRect(cloud.x + 22, cloud.y + 4, 16, 6);
+}
+
+function drawGround() {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+
+  // 지면 라인
+  ctx.fillRect(0, GROUND_Y, canvas.width, 2);
+
+  // 지면 텍스처
+  groundTiles.forEach(tile => {
+    ctx.fillRect(tile.x, tile.y, tile.width, 1.5);
+  });
+}
+
+function drawStars() {
+  if (!isNight) return;
+  stars.forEach(star => {
+    star.twinkle += 0.03;
+    const alpha = 0.5 + Math.sin(star.twinkle) * 0.5;
+    ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.fillRect(star.x, star.y, star.size, star.size);
+  });
+}
+
+function drawMoon() {
+  if (!isNight) return;
+  ctx.fillStyle = '#e0e0e0';
+  // 달
+  ctx.beginPath();
+  ctx.arc(650, 40, 20, 0, Math.PI * 2);
+  ctx.fill();
+  // 그림자 (달의 부분)
+  ctx.fillStyle = isNight ? '#1a1a2e' : '#f7f7f7';
+  ctx.beginPath();
+  ctx.arc(658, 35, 16, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawScore() {
+  const c = isNight ? '#e0e0e0' : '#535353';
+  ctx.fillStyle = c;
+  ctx.font = 'bold 16px Courier New';
+  ctx.textAlign = 'right';
+
+  // 하이 스코어
+  if (highScore > 0) {
+    ctx.fillText(`HI ${String(highScore).padStart(5, '0')}`, canvas.width - 100, 25);
+  }
+
+  // 현재 점수
+  const scoreStr = String(Math.floor(score)).padStart(5, '0');
+  ctx.fillText(scoreStr, canvas.width - 20, 25);
+}
+
+function drawStartScreen() {
+  ctx.fillStyle = '#535353';
+  ctx.font = 'bold 24px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('SPACE를 눌러 시작하세요', canvas.width / 2, 100);
+
+  // 공룡 그리기
+  dino.y = dino.groundY;
+  drawDino();
+}
+
+function drawGameOver() {
+  ctx.fillStyle = '#535353';
+  ctx.font = 'bold 24px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', canvas.width / 2, 90);
+
+  // 재시작 버튼
+  const btnX = canvas.width / 2 - 20;
+  const btnY = 105;
+  ctx.strokeStyle = '#535353';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnX, btnY, 40, 36);
+
+  // 재시작 아이콘 (화살표)
+  ctx.beginPath();
+  ctx.arc(canvas.width / 2, btnY + 18, 10, -Math.PI * 0.7, Math.PI * 0.7);
+  ctx.stroke();
+  // 화살촉
+  ctx.beginPath();
+  ctx.moveTo(canvas.width / 2 + 6, btnY + 10);
+  ctx.lineTo(canvas.width / 2 + 14, btnY + 18);
+  ctx.lineTo(canvas.width / 2 + 6, btnY + 18);
+  ctx.fill();
+
+  // 점수 표시
+  ctx.font = '14px Courier New';
+  ctx.fillText(`점수: ${Math.floor(score)}`, canvas.width / 2, 170);
+}
+
+// ===== 충돌 감지 =====
+function checkCollision(obs) {
+  const dinoBox = {
+    x: dino.x + 5,
+    y: dino.isDucking ? GROUND_Y - dino.duckHeight : dino.y,
+    width: dino.isDucking ? 48 : 30,
+    height: dino.isDucking ? dino.duckHeight : dino.height
+  };
+
+  const obsBox = {
+    x: obs.x + 3,
+    y: obs.y + 3,
+    width: obs.width - 6,
+    height: obs.height - 6
+  };
+
+  return (
+    dinoBox.x < obsBox.x + obsBox.width &&
+    dinoBox.x + dinoBox.width > obsBox.x &&
+    dinoBox.y < obsBox.y + obsBox.height &&
+    dinoBox.y + dinoBox.height > obsBox.y
+  );
+}
+
+// ===== 게임 업데이트 =====
+function update() {
+  if (!gameStarted || gameOver) return;
+
+  frameCount++;
+
+  // 점수 증가
+  score += gameSpeed * 0.02;
+
+  // 속도 증가
+  if (frameCount % 500 === 0) {
+    gameSpeed += 0.3;
+  }
+
+  // 야간 모드 전환
+  if (Math.floor(score) > 0 && Math.floor(score) % 700 < 200 && score > 300) {
+    isNight = true;
+  } else {
+    isNight = false;
+  }
+
+  // 공룡 물리
+  if (dino.isJumping) {
+    dino.velocityY += dino.gravity;
+    dino.y += dino.velocityY;
+
+    if (dino.y >= dino.groundY) {
+      dino.y = dino.groundY;
+      dino.isJumping = false;
+      dino.velocityY = 0;
+    }
+  }
+
+  // 다리 애니메이션
+  dino.legTimer++;
+  if (dino.legTimer > 6) {
+    dino.legFrame++;
+    dino.legTimer = 0;
+  }
+
+  // 장애물 스포닝
+  const minGap = Math.max(80, 150 - gameSpeed * 5);
+  if (obstacles.length === 0 || canvas.width - obstacles[obstacles.length - 1].x > minGap + Math.random() * 200) {
+    if (Math.random() < 0.03) {
+      spawnObstacle();
+    }
+  }
+
+  // 장애물 업데이트
+  obstacles.forEach(obs => {
+    obs.x -= gameSpeed;
+    if (obs.type === 'bird') {
+      obs.wingTimer++;
+      if (obs.wingTimer > 10) {
+        obs.wingFrame++;
+        obs.wingTimer = 0;
+      }
+    }
+  });
+
+  // 화면 밖 장애물 제거
+  obstacles = obstacles.filter(obs => obs.x + obs.width > -50);
+
+  // 구름 업데이트
+  if (Math.random() < 0.005) spawnCloud();
+  clouds.forEach(cloud => { cloud.x -= cloud.speed; });
+  clouds = clouds.filter(c => c.x + c.width > -50);
+
+  // 지면 업데이트
+  groundTiles.forEach(tile => {
+    tile.x -= gameSpeed;
+    if (tile.x < -30) {
+      tile.x = canvas.width + Math.random() * 30;
+      tile.y = GROUND_Y + Math.random() * 8;
+      tile.width = Math.random() * 15 + 5;
+    }
+  });
+
+  // 충돌 감지
+  for (const obs of obstacles) {
+    if (checkCollision(obs)) {
+      gameOver = true;
+      if (Math.floor(score) > highScore) {
+        highScore = Math.floor(score);
+        localStorage.setItem('dinoHighScore', highScore);
+      }
+      break;
+    }
+  }
+}
+
+// ===== 게임 렌더링 =====
+function render() {
+  // 배경
+  ctx.fillStyle = isNight ? '#1a1a2e' : '#f7f7f7';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawStars();
+  drawMoon();
+
+  clouds.forEach(drawCloud);
+  drawGround();
+
+  obstacles.forEach(obs => {
+    switch (obs.type) {
+      case 'cactusSmall': drawCactusSmall(obs); break;
+      case 'cactusLarge': drawCactusLarge(obs); break;
+      case 'cactusGroup': drawCactusGroup(obs); break;
+      case 'bird': drawBird(obs); break;
+    }
+  });
+
+  drawDino();
+  drawScore();
+
+  if (!gameStarted) {
+    drawStartScreen();
+  } else if (gameOver) {
+    drawGameOver();
+  }
+}
+
+// ===== 게임 루프 =====
+function gameLoop() {
+  update();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ===== 입력 처리 =====
+function jump() {
+  if (!gameStarted) {
+    gameStarted = true;
+    return;
+  }
+  if (gameOver) {
+    resetGame();
+    return;
+  }
+  if (!dino.isJumping) {
+    dino.isJumping = true;
+    dino.velocityY = dino.jumpForce;
+    dino.isDucking = false;
+  }
+}
+
+function duck(active) {
+  if (gameStarted && !gameOver) {
+    dino.isDucking = active;
+    // 공중에서 웅크리면 빠르게 내리기
+    if (active && dino.isJumping) {
+      dino.velocityY += 2;
+    }
+  }
+}
+
+function resetGame() {
+  gameOver = false;
+  score = 0;
+  gameSpeed = 6;
+  frameCount = 0;
+  obstacles = [];
+  clouds = [];
+  isNight = false;
+  dino.y = dino.groundY;
+  dino.velocityY = 0;
+  dino.isJumping = false;
+  dino.isDucking = false;
+}
+
+// 키보드 이벤트
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    jump();
+  }
+  if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    duck(true);
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'ArrowDown') {
+    duck(false);
+  }
+});
+
+// 모바일 터치 이벤트
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const y = touch.clientY - rect.top;
+
+  if (y > canvas.height * 0.6) {
+    duck(true);
+  } else {
+    jump();
+  }
+});
+
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  duck(false);
+});
+
+// ===== 초기화 =====
+initGround();
+initStars();
+gameLoop();
+</script>
+</body>
+</html>
