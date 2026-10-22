@@ -16,9 +16,15 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh;
+  min-height: 100vh;
+  padding: 12px;
   font-family: 'Courier New', monospace;
   overflow: hidden;
+}
+
+.game-shell {
+  width: 100%;
+  max-width: 800px;
 }
 
 #gameContainer {
@@ -28,6 +34,9 @@ body {
 
 canvas {
   display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
 }
 
 #info {
@@ -35,12 +44,13 @@ canvas {
   margin-top: 15px;
   color: #535353;
   font-size: 14px;
+  line-height: 1.5;
 }
 </style>
 </head>
 <body>
 
-<div>
+<div class="game-shell">
   <div id="gameContainer">
     <canvas id="gameCanvas" width="800" height="250"></canvas>
   </div>
@@ -55,10 +65,28 @@ const ctx = canvas.getContext('2d');
 let gameStarted = false;
 let gameOver = false;
 let score = 0;
-let highScore = parseInt(localStorage.getItem('dinoHighScore')) || 0;
+let highScore = readHighScore();
 let gameSpeed = 6;
 let frameCount = 0;
 let isNight = false;
+
+// 최고 점수 저장이 막혀도 현재 세션은 계속 플레이할 수 있습니다.
+function readHighScore() {
+  try {
+    const value = Number(localStorage.getItem('dinoHighScore'));
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveHighScore(value) {
+  try {
+    localStorage.setItem('dinoHighScore', String(value));
+  } catch {
+    // 메모리의 최고 점수는 유지하고 저장만 생략합니다.
+  }
+}
 
 // ===== 공룡 =====
 const dino = {
@@ -337,7 +365,6 @@ function drawGround() {
 function drawStars() {
   if (!isNight) return;
   stars.forEach(star => {
-    star.twinkle += 0.03;
     const alpha = 0.5 + Math.sin(star.twinkle) * 0.5;
     ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
     ctx.fillRect(star.x, star.y, star.size, star.size);
@@ -459,6 +486,8 @@ function update() {
     isNight = false;
   }
 
+  if (isNight) stars.forEach(star => { star.twinkle += 0.03; });
+
   // 공룡 물리
   if (dino.isJumping) {
     dino.velocityY += dino.gravity;
@@ -522,7 +551,7 @@ function update() {
       gameOver = true;
       if (Math.floor(score) > highScore) {
         highScore = Math.floor(score);
-        localStorage.setItem('dinoHighScore', highScore);
+        saveHighScore(highScore);
       }
       break;
     }
@@ -561,11 +590,30 @@ function render() {
 }
 
 // ===== 게임 루프 =====
-function gameLoop() {
-  update();
+// 물리·점수·난수 판정은 기존 60Hz 규칙을 유지하고 화면 그리기만 주사율을 따릅니다.
+const STEP_MS = 1000 / 60;
+const MAX_FRAME_MS = 100;
+let lastFrameTime = null;
+let accumulatedTime = 0;
+
+function gameLoop(timestamp) {
+  if (lastFrameTime !== null) {
+    accumulatedTime += Math.min(MAX_FRAME_MS, Math.max(0, timestamp - lastFrameTime));
+    while (accumulatedTime + 1e-7 >= STEP_MS) {
+      update();
+      accumulatedTime = Math.max(0, accumulatedTime - STEP_MS);
+    }
+  }
+  lastFrameTime = timestamp;
   render();
   requestAnimationFrame(gameLoop);
 }
+
+// 다른 탭에 머문 시간을 복귀 후 한꺼번에 진행하지 않습니다.
+document.addEventListener('visibilitychange', () => {
+  lastFrameTime = null;
+  accumulatedTime = 0;
+});
 
 // ===== 입력 처리 =====
 function jump() {
@@ -631,24 +679,27 @@ canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   const touch = e.touches[0];
   const rect = canvas.getBoundingClientRect();
-  const y = touch.clientY - rect.top;
+  const y = (touch.clientY - rect.top) * canvas.height / rect.height;
 
   if (y > canvas.height * 0.6) {
     duck(true);
   } else {
     jump();
   }
-});
+}, { passive: false });
 
-canvas.addEventListener('touchend', (e) => {
+function endTouch(e) {
   e.preventDefault();
   duck(false);
-});
+}
+canvas.addEventListener('touchend', endTouch, { passive: false });
+canvas.addEventListener('touchcancel', endTouch, { passive: false });
 
 // ===== 초기화 =====
 initGround();
 initStars();
-gameLoop();
+render();
+requestAnimationFrame(gameLoop);
 </script>
 </body>
 </html>
